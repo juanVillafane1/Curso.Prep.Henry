@@ -51,17 +51,28 @@ export function validarTransicionCheque(params: {
   }
 }
 
-export type AlertaCheque = "OK" | "PROXIMO_A_VENCER" | "VENCIDO_LEGAL" | "NO_DEPOSITABLE_AUN";
+export type AlertaCheque = "OK" | "PROXIMO_A_VENCER" | "VENCIDO_LEGAL" | "NO_DEPOSITABLE_AUN" | "DEBITO_PROXIMO" | "DEBITO_VENCIDO";
 
-/** Semáforo para cheques en cartera. */
+/**
+ * Semáforo para cheques en cartera.
+ * - Recibidos: ventana de depósito (no antes de la fecha de pago, no después del límite legal).
+ * - Emitidos: aviso de débito próximo para que el cliente tenga fondos.
+ */
 export function alertaCheque(params: {
   estado: EstadoCheque;
+  direccion: DireccionCheque;
   hoy: Date;
   fechaPago: Date | null;
   fechaLimiteDeposito: Date;
   diasAviso?: number;
 }): AlertaCheque {
   if (params.estado !== EstadoCheque.EN_CARTERA) return "OK";
+  if (params.direccion === DireccionCheque.EMITIDO) {
+    const fecha = params.fechaPago ?? params.fechaLimiteDeposito;
+    const faltan = diasEntre(params.hoy, fecha);
+    if (faltan < 0) return "DEBITO_VENCIDO";
+    return faltan <= (params.diasAviso ?? 5) ? "DEBITO_PROXIMO" : "OK";
+  }
   if (params.fechaPago && params.hoy < params.fechaPago) return "NO_DEPOSITABLE_AUN";
   const restantes = diasEntre(params.hoy, params.fechaLimiteDeposito);
   if (restantes < 0) return "VENCIDO_LEGAL";

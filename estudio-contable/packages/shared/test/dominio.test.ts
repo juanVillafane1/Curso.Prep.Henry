@@ -112,9 +112,13 @@ describe("Cheques", () => {
   });
 
   it("semáforo de cartera", () => {
-    const base = { estado: "EN_CARTERA" as const, fechaPago: fecha(2026, 11, 1), fechaLimiteDeposito: fecha(2026, 12, 1) };
+    const base = { estado: "EN_CARTERA" as const, direccion: "RECIBIDO" as const, fechaPago: fecha(2026, 11, 1), fechaLimiteDeposito: fecha(2026, 12, 1) };
     expect(alertaCheque({ ...base, hoy: fecha(2026, 11, 28) })).toBe("PROXIMO_A_VENCER");
     expect(alertaCheque({ ...base, hoy: fecha(2026, 12, 2) })).toBe("VENCIDO_LEGAL");
+    // Un cheque emitido nunca es "no depositable": se avisa el débito
+    const emitido = { estado: "EN_CARTERA" as const, direccion: "EMITIDO" as const, fechaPago: fecha(2026, 11, 11), fechaLimiteDeposito: fecha(2026, 12, 11) };
+    expect(alertaCheque({ ...emitido, hoy: fecha(2026, 11, 8) })).toBe("DEBITO_PROXIMO");
+    expect(alertaCheque({ ...emitido, hoy: fecha(2026, 10, 1) })).toBe("OK");
   });
 });
 

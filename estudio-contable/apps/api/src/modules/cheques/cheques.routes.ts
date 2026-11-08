@@ -57,7 +57,7 @@ chequesRouter.get("/", async (req, res) => {
     orderBy: [{ fechaPago: "asc" }, { fechaEmision: "asc" }],
   });
   const hoy = new Date();
-  res.json(cheques.map((c) => ({ ...c, alerta: alertaCheque({ estado: c.estado, hoy, fechaPago: c.fechaPago, fechaLimiteDeposito: c.fechaLimiteDeposito }) })));
+  res.json(cheques.map((c) => ({ ...c, alerta: alertaCheque({ estado: c.estado, direccion: c.direccion, hoy, fechaPago: c.fechaPago, fechaLimiteDeposito: c.fechaLimiteDeposito }) })));
 });
 
 chequesRouter.post("/", async (req, res) => {

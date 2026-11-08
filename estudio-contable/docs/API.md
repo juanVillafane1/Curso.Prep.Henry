@@ -56,7 +56,7 @@ Errores con forma uniforme:
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/cheques?estado=&direccion=&tipo=&clienteId=&desde=&hasta=` | Incluye `alerta`: `OK`, `NO_DEPOSITABLE_AUN`, `PROXIMO_A_VENCER`, `VENCIDO_LEGAL` |
+| GET | `/cheques?estado=&direccion=&tipo=&clienteId=&desde=&hasta=` | Incluye `alerta`. Recibidos: `OK`, `NO_DEPOSITABLE_AUN`, `PROXIMO_A_VENCER`, `VENCIDO_LEGAL`. Emitidos: `OK`, `DEBITO_PROXIMO`, `DEBITO_VENCIDO` |
 | POST | `/cheques` | Alta. Calcula `fechaVencimientoLegal` (+30 días de la fecha de pago o emisión) y `fechaLimiteDeposito` |
 | GET | `/cheques/:id` | Detalle + historial de movimientos + `transicionesPermitidas` |
 | PATCH | `/cheques/:id` | Límite de depósito, categoría de gasto (solo contabilidad completa), observaciones |
