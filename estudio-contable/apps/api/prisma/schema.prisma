@@ -1,0 +1,538 @@
+// =============================================================================
+//  Estudio Contable – Esquema de datos (PostgreSQL)
+//  Convención: modelos en PascalCase, tablas/columnas en snake_case (@@map/@map)
+//  Importes: Decimal(15,2). Fechas de vencimiento: @db.Date (día civil, sin hora).
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------------------------------------------
+//  ENUMS (sincronizados con packages/shared/src/enums.ts)
+// ----------------------------------------------------------------------------
+
+enum TipoPersona {
+  FISICA
+  JURIDICA
+}
+
+enum CondicionIva {
+  RESPONSABLE_INSCRIPTO
+  MONOTRIBUTO
+  EXENTO
+  NO_ALCANZADO
+}
+
+enum TipoImpuesto {
+  IVA
+  IIBB
+  TASA_MUNICIPAL
+  F931
+  GANANCIAS
+  BIENES_PERSONALES
+  AUTONOMOS
+  MONOTRIBUTO
+  OTRO
+}
+
+enum Periodicidad {
+  MENSUAL
+  BIMESTRAL
+  TRIMESTRAL
+  ANUAL
+}
+
+enum EstadoVencimiento {
+  PENDIENTE
+  PRESENTADO_PENDIENTE_PAGO
+  FINALIZADO
+  VENCIDO
+  ANULADO
+}
+
+enum TipoPlan {
+  PLAN_ARCA
+  PLAN_PROVINCIAL
+  PLAN_MUNICIPAL
+  PRESTAMO_BANCARIO
+}
+
+enum EstadoPlan {
+  VIGENTE
+  CADUCO
+  CANCELADO
+  FINALIZADO
+}
+
+enum EstadoCuota {
+  VIGENTE
+  DEBITADA
+  RECHAZADA // "Debitada con error / Rechazada"
+  CAIDA // No debitada en 1º ni 2º vencimiento
+  IMPUTADA
+}
+
+enum TipoCheque {
+  FISICO
+  ECHEQ
+}
+
+enum DireccionCheque {
+  RECIBIDO // a cobrar (cartera)
+  EMITIDO // a pagar
+}
+
+enum EstadoCheque {
+  EN_CARTERA
+  DEPOSITADO
+  ENDOSADO
+  COBRADO
+  RECHAZADO
+  ANULADO
+}
+
+enum TipoAdjunto {
+  VEP
+  COMPROBANTE_PAGO
+  ACUSE_DJ
+  CONSTANCIA_PLAN
+  IMAGEN_CHEQUE
+  OTRO
+}
+
+enum CanalNotificacion {
+  WHATSAPP
+  EMAIL
+}
+
+enum EstadoNotificacion {
+  PENDIENTE
+  ENVIADA
+  ENTREGADA
+  LEIDA
+  FALLIDA
+}
+
+enum RolUsuario {
+  ADMIN
+  CONTADOR
+  ADMINISTRATIVO
+}
+
+// ----------------------------------------------------------------------------
+//  USUARIOS DEL ESTUDIO
+// ----------------------------------------------------------------------------
+
+model Usuario {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  nombre       String
+  passwordHash String     @map("password_hash")
+  rol          RolUsuario @default(ADMINISTRATIVO)
+  activo       Boolean    @default(true)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  clientesAsignados Cliente[]        @relation("ResponsableCliente")
+  auditoria         EventoAuditoria[]
+
+  @@map("usuarios")
+}
+
+// ----------------------------------------------------------------------------
+//  CLIENTES
+// ----------------------------------------------------------------------------
+
+model Cliente {
+  id                         String       @id @default(cuid())
+  razonSocial                String       @map("razon_social")
+  nombreFantasia             String?      @map("nombre_fantasia")
+  tipoPersona                TipoPersona  @default(FISICA) @map("tipo_persona")
+  /// CUIT (11 dígitos) o DNI (7-8), sin guiones
+  cuit                       String       @unique
+  /// Último dígito del CUIT/DNI, desnormalizado para consultas de escalonamiento
+  terminacionCuit            Int          @map("terminacion_cuit") @db.SmallInt
+  condicionIva               CondicionIva @default(RESPONSABLE_INSCRIPTO) @map("condicion_iva")
+
+  // --- Segmentación (reglas de negocio) ---
+  tieneEmpleados             Boolean      @default(false) @map("tiene_empleados") /// habilita F.931 / cargas sociales
+  esIvaDiferido              Boolean      @default(false) @map("es_iva_diferido") /// PyME: pago IVA +N meses
+  manejaContabilidadCompleta Boolean      @default(false) @map("maneja_contabilidad_completa") /// habilita categorías de gasto
+
+  // --- Contacto / notificaciones ---
+  email                      String?
+  telefonoWhatsapp           String?      @map("telefono_whatsapp") /// formato E.164: +5491122334455
+  aceptaNotificaciones       Boolean      @default(true) @map("acepta_notificaciones")
+  domicilioFiscal            String?      @map("domicilio_fiscal")
+  jurisdiccionIibb           String?      @map("jurisdiccion_iibb") /// ej. "ARBA", "AGIP", "CM"
+  municipio                  String?
+  notas                      String?
+
+  responsableId              String?      @map("responsable_id")
+  responsable                Usuario?     @relation("ResponsableCliente", fields: [responsableId], references: [id], onDelete: SetNull)
+
+  activo                     Boolean      @default(true)
+  createdAt                  DateTime     @default(now()) @map("created_at")
+  updatedAt                  DateTime     @updatedAt @map("updated_at")
+
+  impuestos           ClienteImpuesto[]
+  vencimientos        VencimientoFiscal[]
+  planes              PlanCredito[]
+  chequesEmitidos     Cheque[]            @relation("ChequeClienteEmisor")
+  chequesRecibidos    Cheque[]            @relation("ChequeClienteReceptor")
+  categoriasGasto     CategoriaGasto[]
+  proveedores         Proveedor[]
+  notificaciones      Notificacion[]
+
+  @@index([terminacionCuit])
+  @@index([activo])
+  @@map("clientes")
+}
+
+/// Qué obligaciones periódicas tiene cada cliente (alimenta la generación automática de vencimientos).
+model ClienteImpuesto {
+  id           String       @id @default(cuid())
+  clienteId    String       @map("cliente_id")
+  cliente      Cliente      @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  impuesto     TipoImpuesto
+  jurisdiccion String       @default("NACIONAL") /// "NACIONAL", "ARBA", "AGIP", "CM", "MUNI_ROSARIO"...
+  periodicidad Periodicidad @default(MENSUAL)
+  /// Día fijo opcional que reemplaza el escalonamiento por CUIT (ej. tasas municipales)
+  diaFijo      Int?         @map("dia_fijo") @db.SmallInt
+  activo       Boolean      @default(true)
+  desde        DateTime?    @db.Date
+  hasta        DateTime?    @db.Date
+
+  @@unique([clienteId, impuesto, jurisdiccion])
+  @@map("cliente_impuestos")
+}
+
+// ----------------------------------------------------------------------------
+//  CALENDARIO FISCAL Y FERIADOS
+// ----------------------------------------------------------------------------
+
+/// Cronograma oficial publicado (ARCA/fiscos). Override del cálculo por regla.
+/// Permite cargar reprogramaciones y prórrogas generales.
+model CalendarioFiscal {
+  id               String       @id @default(cuid())
+  impuesto         TipoImpuesto
+  jurisdiccion     String       @default("NACIONAL")
+  periodo          String       /// "YYYY-MM"
+  terminacionDesde Int          @map("terminacion_desde") @db.SmallInt
+  terminacionHasta Int          @map("terminacion_hasta") @db.SmallInt
+  fecha            DateTime     @db.Date
+  fuente           String?      /// RG / resolución que lo dispone
+  createdAt        DateTime     @default(now()) @map("created_at")
+
+  @@unique([impuesto, jurisdiccion, periodo, terminacionDesde, terminacionHasta])
+  @@map("calendario_fiscal")
+}
+
+model Feriado {
+  fecha       DateTime @id @db.Date
+  descripcion String
+  esNacional  Boolean  @default(true) @map("es_nacional")
+
+  @@map("feriados")
+}
+
+// ----------------------------------------------------------------------------
+//  VENCIMIENTOS FISCALES / LIQUIDACIONES
+// ----------------------------------------------------------------------------
+
+model VencimientoFiscal {
+  id                       String            @id @default(cuid())
+  clienteId                String            @map("cliente_id")
+  cliente                  Cliente           @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  impuesto                 TipoImpuesto
+  jurisdiccion             String            @default("NACIONAL")
+  periodo                  String            /// período fiscal "YYYY-MM" (o "YYYY" para anuales)
+
+  // --- Fechas ---
+  fechaVencimientoCalculada DateTime         @map("fecha_vencimiento_calculada") @db.Date /// resultado del motor de reglas
+  fechaVencimiento          DateTime         @map("fecha_vencimiento") @db.Date /// vigente (puede ser override manual)
+  fechaVencimientoPago      DateTime         @map("fecha_vencimiento_pago") @db.Date /// = fechaVencimiento salvo IVA diferido
+  esOverrideManual          Boolean          @default(false) @map("es_override_manual")
+  motivoOverride            String?          @map("motivo_override") /// ej. "RG 5xxx prórroga"
+
+  // --- Liquidación ---
+  monto                     Decimal?         @db.Decimal(15, 2) /// null = aún no liquidado
+  saldoAFavor               Decimal?         @map("saldo_a_favor") @db.Decimal(15, 2)
+  fechaPresentacion         DateTime?        @map("fecha_presentacion")
+  fechaPago                 DateTime?        @map("fecha_pago")
+  numeroVep                 String?          @map("numero_vep")
+  estado                    EstadoVencimiento @default(PENDIENTE)
+  observaciones             String?
+
+  createdAt                 DateTime         @default(now()) @map("created_at")
+  updatedAt                 DateTime         @updatedAt @map("updated_at")
+
+  adjuntos                  Adjunto[]
+  notificaciones            Notificacion[]
+
+  @@unique([clienteId, impuesto, jurisdiccion, periodo])
+  @@index([fechaVencimiento, estado])
+  @@index([fechaVencimientoPago, estado])
+  @@map("vencimientos_fiscales")
+}
+
+// ----------------------------------------------------------------------------
+//  PLANES DE PAGO Y CRÉDITOS BANCARIOS
+// ----------------------------------------------------------------------------
+
+model PlanCredito {
+  id                     String     @id @default(cuid())
+  clienteId              String     @map("cliente_id")
+  cliente                Cliente    @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  tipo                   TipoPlan
+  /// N° de plan (Mis Facilidades) o N° de préstamo
+  numero                 String?
+  entidad                String     /// "ARCA", "ARBA", "Banco Nación"...
+  descripcion            String?
+  /// Para planes: impuestos/períodos incluidos
+  obligacionesIncluidas  String?    @map("obligaciones_incluidas")
+  montoTotal             Decimal    @map("monto_total") @db.Decimal(15, 2)
+  tasaMensual            Decimal?   @map("tasa_mensual") @db.Decimal(8, 6)
+  cantidadCuotas         Int        @map("cantidad_cuotas")
+  fechaAlta              DateTime   @map("fecha_alta") @db.Date
+  fechaPrimerVencimiento DateTime   @map("fecha_primer_vencimiento") @db.Date
+  /// Día del 1º débito (X). 2º débito = X + diasReintento (solo ARCA)
+  diaDebito              Int        @map("dia_debito") @db.SmallInt
+  diasReintento          Int?       @map("dias_reintento") @db.SmallInt
+  cbuDebito              String?    @map("cbu_debito")
+  /// Cantidad de cuotas caídas que provoca la caducidad (ARCA suele ser 2 o 3)
+  cuotasCaidasCaducidad  Int?       @map("cuotas_caidas_caducidad") @db.SmallInt
+  estado                 EstadoPlan @default(VIGENTE)
+  createdAt              DateTime   @default(now()) @map("created_at")
+  updatedAt              DateTime   @updatedAt @map("updated_at")
+
+  cuotas                 Cuota[]
+  adjuntos               Adjunto[]
+
+  @@index([clienteId, estado])
+  @@map("planes_creditos")
+}
+
+model Cuota {
+  id                      String      @id @default(cuid())
+  planId                  String      @map("plan_id")
+  plan                    PlanCredito @relation(fields: [planId], references: [id], onDelete: Cascade)
+  numero                  Int
+  fechaVencimiento        DateTime    @map("fecha_vencimiento") @db.Date /// 1º vencimiento (día X)
+  fechaSegundoVencimiento DateTime?   @map("fecha_segundo_vencimiento") @db.Date /// reintento (X+10) – solo ARCA
+  capital                 Decimal     @db.Decimal(15, 2)
+  interes                 Decimal     @default(0) @db.Decimal(15, 2)
+  importe                 Decimal     @db.Decimal(15, 2)
+  interesResarcitorio     Decimal?    @map("interes_resarcitorio") @db.Decimal(15, 2) /// recargo por débito en 2º venc.
+  estado                  EstadoCuota @default(VIGENTE)
+  intentosDebito          Int         @default(0) @map("intentos_debito") @db.SmallInt
+  fechaDebito             DateTime?   @map("fecha_debito") @db.Date
+  motivoRechazo           String?     @map("motivo_rechazo")
+  fechaImputacion         DateTime?   @map("fecha_imputacion") @db.Date
+  createdAt               DateTime    @default(now()) @map("created_at")
+  updatedAt               DateTime    @updatedAt @map("updated_at")
+
+  adjuntos                Adjunto[]
+  notificaciones          Notificacion[]
+
+  @@unique([planId, numero])
+  @@index([fechaVencimiento, estado])
+  @@index([fechaSegundoVencimiento, estado])
+  @@map("cuotas")
+}
+
+// ----------------------------------------------------------------------------
+//  CHEQUES Y VALORES (físicos + ECHEQ)
+// ----------------------------------------------------------------------------
+
+model Proveedor {
+  id        String   @id @default(cuid())
+  clienteId String   @map("cliente_id") /// proveedor del cliente del estudio
+  cliente   Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  nombre    String
+  cuit      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  chequesEntregados Cheque[]
+
+  @@unique([clienteId, nombre])
+  @@map("proveedores")
+}
+
+/// Solo disponible para clientes con maneja_contabilidad_completa = true
+model CategoriaGasto {
+  id           String  @id @default(cuid())
+  clienteId    String? @map("cliente_id") /// null = categoría global del estudio
+  cliente      Cliente? @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  nombre       String  /// "Mantenimiento", "Gastos Administrativos"...
+  cuentaContable String? @map("cuenta_contable")
+  activo       Boolean @default(true)
+
+  cheques      Cheque[]
+
+  @@unique([clienteId, nombre])
+  @@map("categorias_gasto")
+}
+
+model Cheque {
+  id                   String          @id @default(cuid())
+  tipo                 TipoCheque
+  direccion            DireccionCheque
+  numero               String
+  banco                String
+  sucursal             String?
+  cuitLibrador         String?         @map("cuit_librador")
+  librador             String?         /// nombre del firmante/emisor original
+  importe              Decimal         @db.Decimal(15, 2)
+  esDiferido           Boolean         @default(false) @map("es_diferido")
+  /// ECHEQ: id en la red interbancaria
+  echeqId              String?         @unique @map("echeq_id")
+
+  // --- Fechas ---
+  fechaEmision          DateTime       @map("fecha_emision") @db.Date
+  fechaPago             DateTime?      @map("fecha_pago") @db.Date /// fecha de pago/cobro (diferido)
+  fechaVencimientoLegal DateTime       @map("fecha_vencimiento_legal") @db.Date /// +30 días
+  fechaLimiteDeposito   DateTime       @map("fecha_limite_deposito") @db.Date
+  fechaDeposito         DateTime?      @map("fecha_deposito") @db.Date
+  fechaAcreditacion     DateTime?      @map("fecha_acreditacion") @db.Date
+  fechaEndoso           DateTime?      @map("fecha_endoso") @db.Date
+  fechaRechazo          DateTime?      @map("fecha_rechazo") @db.Date
+  motivoRechazo         String?        @map("motivo_rechazo")
+
+  // --- Partes ---
+  clienteEmisorId       String?        @map("cliente_emisor_id")
+  clienteEmisor         Cliente?       @relation("ChequeClienteEmisor", fields: [clienteEmisorId], references: [id], onDelete: SetNull)
+  clienteReceptorId     String?        @map("cliente_receptor_id")
+  clienteReceptor       Cliente?       @relation("ChequeClienteReceptor", fields: [clienteReceptorId], references: [id], onDelete: SetNull)
+  proveedorEntregadoId  String?        @map("proveedor_entregado_id")
+  proveedorEntregado    Proveedor?     @relation(fields: [proveedorEntregadoId], references: [id], onDelete: SetNull)
+
+  // --- Contabilidad (opcional) ---
+  categoriaGastoId      String?        @map("categoria_gasto_id")
+  categoriaGasto        CategoriaGasto? @relation(fields: [categoriaGastoId], references: [id], onDelete: SetNull)
+
+  estado                EstadoCheque   @default(EN_CARTERA)
+  observaciones         String?
+  createdAt             DateTime       @default(now()) @map("created_at")
+  updatedAt             DateTime       @updatedAt @map("updated_at")
+
+  movimientos           MovimientoCheque[]
+  adjuntos              Adjunto[]
+
+  @@unique([banco, numero, cuitLibrador])
+  @@index([estado, fechaLimiteDeposito])
+  @@index([direccion, fechaPago])
+  @@map("cheques")
+}
+
+/// Historial de cambios de estado de cada cheque (trazabilidad del valor).
+model MovimientoCheque {
+  id          String        @id @default(cuid())
+  chequeId    String        @map("cheque_id")
+  cheque      Cheque        @relation(fields: [chequeId], references: [id], onDelete: Cascade)
+  estadoDesde EstadoCheque? @map("estado_desde")
+  estadoHasta EstadoCheque  @map("estado_hasta")
+  fecha       DateTime      @default(now())
+  detalle     String?
+  usuarioId   String?       @map("usuario_id")
+
+  @@index([chequeId, fecha])
+  @@map("movimientos_cheque")
+}
+
+// ----------------------------------------------------------------------------
+//  ADJUNTOS (VEP, comprobantes, acuses, imágenes de cheques)
+// ----------------------------------------------------------------------------
+
+model Adjunto {
+  id            String       @id @default(cuid())
+  tipo          TipoAdjunto
+  nombreArchivo String       @map("nombre_archivo")
+  mimeType      String       @map("mime_type")
+  tamanioBytes  Int          @map("tamanio_bytes")
+  storageKey    String       @map("storage_key") /// ruta en disco / S3
+  sha256        String?
+
+  vencimientoId String?            @map("vencimiento_id")
+  vencimiento   VencimientoFiscal? @relation(fields: [vencimientoId], references: [id], onDelete: Cascade)
+  planId        String?            @map("plan_id")
+  plan          PlanCredito?       @relation(fields: [planId], references: [id], onDelete: Cascade)
+  cuotaId       String?            @map("cuota_id")
+  cuota         Cuota?             @relation(fields: [cuotaId], references: [id], onDelete: Cascade)
+  chequeId      String?            @map("cheque_id")
+  cheque        Cheque?            @relation(fields: [chequeId], references: [id], onDelete: Cascade)
+
+  subidoPorId   String?      @map("subido_por_id")
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  @@index([vencimientoId])
+  @@index([cuotaId])
+  @@index([chequeId])
+  @@map("adjuntos")
+}
+
+// ----------------------------------------------------------------------------
+//  NOTIFICACIONES (WhatsApp) Y RESÚMENES
+// ----------------------------------------------------------------------------
+
+model Notificacion {
+  id             String             @id @default(cuid())
+  clienteId      String             @map("cliente_id")
+  cliente        Cliente            @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  canal          CanalNotificacion  @default(WHATSAPP)
+  destino        String             /// teléfono E.164 / email
+  plantilla      String?
+  mensaje        String
+  /// Clave de idempotencia: evita duplicar avisos si el job corre dos veces
+  claveIdempotencia String          @unique @map("clave_idempotencia")
+  vencimientoId  String?            @map("vencimiento_id")
+  vencimiento    VencimientoFiscal? @relation(fields: [vencimientoId], references: [id], onDelete: SetNull)
+  cuotaId        String?            @map("cuota_id")
+  cuota          Cuota?             @relation(fields: [cuotaId], references: [id], onDelete: SetNull)
+  estado         EstadoNotificacion @default(PENDIENTE)
+  proveedorMsgId String?            @map("proveedor_msg_id") /// wamid de Meta
+  error          String?
+  programadaPara DateTime           @map("programada_para")
+  enviadaAt      DateTime?          @map("enviada_at")
+  createdAt      DateTime           @default(now()) @map("created_at")
+
+  @@index([estado, programadaPara])
+  @@map("notificaciones")
+}
+
+/// Snapshot del resumen de compromisos generado cada lunes.
+model ResumenSemanal {
+  id          String   @id @default(cuid())
+  semanaDesde DateTime @unique @map("semana_desde") @db.Date
+  semanaHasta DateTime @map("semana_hasta") @db.Date
+  totalImporte Decimal @map("total_importe") @db.Decimal(15, 2)
+  contenido   Json     /// ResumenCompromisos (packages/shared/src/dashboard.ts)
+  generadoAt  DateTime @default(now()) @map("generado_at")
+
+  @@map("resumenes_semanales")
+}
+
+// ----------------------------------------------------------------------------
+//  AUDITORÍA (overrides manuales, cambios de estado sensibles)
+// ----------------------------------------------------------------------------
+
+model EventoAuditoria {
+  id         String   @id @default(cuid())
+  entidad    String   /// "VencimientoFiscal", "Cuota", "Cheque"...
+  entidadId  String   @map("entidad_id")
+  accion     String   /// "OVERRIDE_FECHA", "CAMBIO_ESTADO", ...
+  antes      Json?
+  despues    Json?
+  usuarioId  String?  @map("usuario_id")
+  usuario    Usuario? @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([entidad, entidadId])
+  @@map("eventos_auditoria")
+}

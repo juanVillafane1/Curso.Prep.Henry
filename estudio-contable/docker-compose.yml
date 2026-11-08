@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-estudio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-estudio}
+      POSTGRES_DB: ${POSTGRES_DB:-estudio_contable}
+      TZ: America/Argentina/Buenos_Aires
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-estudio}"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  pgdata:

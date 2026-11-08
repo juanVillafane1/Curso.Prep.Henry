@@ -1,0 +1,19 @@
+{
+  "name": "estudio-contable",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Sistema de gestión y control financiero/impositivo para estudio contable",
+  "workspaces": ["packages/*", "apps/*"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev:api": "npm run dev -w @estudio/api",
+    "dev:web": "npm run dev -w @estudio/web",
+    "dev:worker": "npm run worker -w @estudio/api",
+    "build": "npm run build -w @estudio/shared && npm run build -w @estudio/api && npm run build -w @estudio/web",
+    "test": "npm test -w @estudio/shared",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:up": "docker compose up -d db",
+    "db:migrate": "npm run prisma:migrate -w @estudio/api",
+    "db:seed": "npm run prisma:seed -w @estudio/api"
+  }
+}
