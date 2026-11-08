@@ -1,6 +1,7 @@
 import type { ResumenCompromisos } from "@estudio/shared";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api/v1";
+// En el servidor (páginas SSR) se llama directo a la API; en el navegador, vía el proxy de Next.
+const BASE = typeof window === "undefined" ? process.env.API_URL ?? "http://localhost:4000/api/v1" : "/api/v1";
 
 export class ApiError extends Error {
   constructor(public status: number, public codigo: string, message: string) {

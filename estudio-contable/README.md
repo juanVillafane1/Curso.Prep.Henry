@@ -17,7 +17,7 @@ npm run build -w @estudio/shared
 
 npm run dev:api        # http://localhost:4000/api/v1
 npm run dev:worker     # tareas programadas (recordatorios, cuotas, resumen semanal)
-npm run dev:web        # http://localhost:3000
+npm run dev:web        # http://localhost:3000 (proxy /api/v1 → API)
 ```
 
 Generar la agenda de un período: `curl -XPOST localhost:4000/api/v1/vencimientos/generar -H 'Content-Type: application/json' -d '{"periodo":"2026-11"}'`
