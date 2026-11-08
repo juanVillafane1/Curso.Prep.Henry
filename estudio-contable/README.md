@@ -4,6 +4,14 @@ Sistema para centralizar la **agenda de vencimientos impositivos**, **planes de 
 
 **Stack:** TypeScript · Express 5 · Prisma 6 · PostgreSQL 16 · Next.js 15 · Vitest · node-cron · WhatsApp Cloud API
 
+## Capturas
+
+| Dashboard semanal | Vencimientos |
+|---|---|
+| ![Dashboard semanal](docs/capturas/1-dashboard-semanal.png) | ![Vencimientos](docs/capturas/4-vencimientos.png) |
+
+Más en [`docs/capturas`](docs/capturas).
+
 ## Inicio rápido
 
 ```bash
